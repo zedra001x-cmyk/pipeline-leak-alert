@@ -85,6 +85,11 @@ class CommandIn(BaseModel):
     action: str = Field(min_length=3, max_length=10)
 
 
+class CommandVerifyIn(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    observed_state: Literal["OPEN", "CLOSED", "RUNNING", "STOPPED"]
+
+
 class LeakIn(BaseModel):
     model_config = ConfigDict(extra="forbid")
     section: int = Field(ge=0, le=2)

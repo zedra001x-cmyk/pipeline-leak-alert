@@ -64,9 +64,23 @@ def process_reading(db: Session, data: ReadingIn) -> ProcessedReading:
                         temperature=data.temperature)
     result = raw_result
 
+    # Equipment changes can briefly disturb flow. Only non-critical leak
+    # classifications get a short settling window; critical remains immediate.
+    if raw_result.status is Status.LEAK_SUSPECTED and data.sensor_status == "OK":
+        now = utcnow()
+        changed_assets = db.scalars(select(Asset).where(
+            (Asset.kind == "PUMP") | (Asset.position.in_((section.id - 1, section.id)))
+        )).all()
+        if any(0 <= (now - asset.updated_at).total_seconds() <= 5.0
+               for asset in changed_assets):
+            result = DetectionResult(
+                Status.WARNING, raw_result.flow_difference,
+                raw_result.reasons + ["Recent equipment transition: allow the flow to settle before treating this as a persistent leak."],
+            )
+
     # A single transient reading should not immediately become a confirmed leak.
     # CRITICAL remains immediate so serious pressure/flow/temperature conditions are not delayed.
-    if (raw_result.status is Status.LEAK_SUSPECTED and LEAK_CONFIRMATIONS > 1
+    if (result is raw_result and raw_result.status is Status.LEAK_SUSPECTED and LEAK_CONFIRMATIONS > 1
             and data.sensor_status == "OK"):
         previous = db.scalars(
             select(SensorReading)
@@ -173,7 +187,8 @@ def get_dashboard_data(db: Session) -> dict:
             .order_by(SensorReading.id.desc())
             .limit(1)
         ).first()
-        rows.append({"section": section, "reading": last})
+        rows.append({"section": section, "reading": last,
+                     "telemetry_health": telemetry_health(last)})
 
     counts = Counter(s.status for s in sections)
     active_alerts = db.scalar(
@@ -199,6 +214,22 @@ def get_dashboard_data(db: Session) -> dict:
     }
 
 
+def telemetry_health(reading: SensorReading | None, now=None) -> str:
+    """Use two missed intervals before calling a delayed telemetry source offline."""
+    if reading is None:
+        return "MISSING"
+    if reading.sensor_status == "OFFLINE":
+        return "OFFLINE"
+    if reading.sensor_status != "OK":
+        return "FAULT"
+    age = ((now or utcnow()) - reading.created_at).total_seconds()
+    if age <= DEVICE_ONLINE_SECONDS:
+        return "CURRENT"
+    if age <= DEVICE_ONLINE_SECONDS * 2:
+        return "STALE"
+    return "OFFLINE"
+
+
 def get_tanks(db: Session) -> dict:
     raw = get_setting(db, "tank_levels", "")
     try:
@@ -216,11 +247,14 @@ def build_state(db: Session, user, sim, mode: str) -> dict:
         s, r = row["section"], row["reading"]
         sections.append({
             "id": s.id, "name": s.name, "status": s.status,
+            "telemetry_health": row["telemetry_health"],
             "pressure": r.pressure if r else None, "flow_in": r.flow_in if r else None,
             "flow_out": r.flow_out if r else None, "temperature": r.temperature if r else None,
+            "sensor_status": r.sensor_status if r else None,
             "updated": r.created_at.isoformat() if r else None,
         })
-    pending = {c.asset_id for c in db.scalars(select(Command).where(Command.status == "PENDING"))}
+    pending = {c.asset_id for c in db.scalars(select(Command).where(
+        Command.status.in_(("PENDING", "SENT", "EXECUTED"))))}
     assets = [
         {"id": a.id, "name": a.name, "kind": a.kind, "position": a.position,
          "state": a.state, "pending": a.id in pending}
@@ -233,7 +267,16 @@ def build_state(db: Session, user, sim, mode: str) -> dict:
     ]
     now = utcnow()
     devices = db.scalars(select(Device).where(Device.enabled.is_(True))).all()
-    online = sum(1 for d in devices if d.last_seen and (now - d.last_seen).total_seconds() <= DEVICE_ONLINE_SECONDS)
+    device_health = []
+    for device in devices:
+        age = (now - device.last_seen).total_seconds() if device.last_seen else None
+        health = ("MISSING" if age is None else "CURRENT" if age <= DEVICE_ONLINE_SECONDS
+                  else "STALE" if age <= DEVICE_ONLINE_SECONDS * 2 else "OFFLINE")
+        device_health.append({"id": device.id, "name": device.name,
+                              "pipeline_section_id": device.pipeline_section_id,
+                              "last_seen": device.last_seen.isoformat() if device.last_seen else None,
+                              "health": health})
+    online = sum(1 for d in device_health if d["health"] == "CURRENT")
     return {
         "mode": mode,
         "sim": {"running": bool(sim.running)},
@@ -241,6 +284,6 @@ def build_state(db: Session, user, sim, mode: str) -> dict:
         "user": {"username": user.username, "role": user.role},
         "sections": sections, "assets": assets, "alerts": alerts,
         "summary": data["summary"],
-        "devices": {"total": len(devices), "online": online},
+        "devices": {"total": len(devices), "online": online, "items": device_health},
         "tanks": get_tanks(db),
     }

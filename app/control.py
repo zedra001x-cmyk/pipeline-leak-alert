@@ -16,6 +16,13 @@ class CommandError(ValueError):
     pass
 
 
+COMMAND_TRANSITIONS = {
+    "PENDING": "SENT",
+    "SENT": "EXECUTED",
+    "EXECUTED": "VERIFIED",
+}
+
+
 def audit(db: Session, username: str, action: str, detail: str = "") -> None:
     """Add an audit row (the caller commits)."""
     db.add(AuditLog(username=username[:60], action=action[:40], detail=detail[:300]))
@@ -48,18 +55,31 @@ def enqueue_command(db: Session, asset_id: int, action: str, requested_by: str) 
     return command
 
 
-def apply_command(db: Session, command: Command) -> None:
-    asset = command.asset
-    asset.state = ACTIONS[asset.kind][command.action]
-    asset.updated_at = utcnow()
-    command.status = "APPLIED"
-    command.applied_at = utcnow()
+def transition_command(command: Command, next_status: str, observed_state: str | None = None) -> None:
+    """Advance exactly one command stage; verification requires matching feedback."""
+    expected = COMMAND_TRANSITIONS.get(command.status)
+    if expected != next_status:
+        raise CommandError(f"Cannot transition command from {command.status} to {next_status}")
+    if next_status == "VERIFIED":
+        desired = ACTIONS[command.asset.kind][command.action]
+        if observed_state != desired:
+            raise CommandError("Reported equipment state does not match the requested action")
+        command.asset.state = observed_state
+        command.asset.updated_at = utcnow()
+    command.status = next_status
+    if next_status == "EXECUTED":
+        command.applied_at = utcnow()
 
 
 def apply_pending_commands(db: Session) -> int:
     pending = db.scalars(select(Command).where(Command.status == "PENDING").order_by(Command.id)).all()
     for command in pending:
-        apply_command(db, command)
+        target = ACTIONS[command.asset.kind][command.action]
+        transition_command(command, "SENT")
+        transition_command(command, "EXECUTED")
+        # The built-in simulator owns this virtual equipment, so it can compare
+        # the simulated state with the requested target and complete verification.
+        transition_command(command, "VERIFIED", observed_state=target)
     if pending:
         db.commit()
     return len(pending)
@@ -68,7 +88,8 @@ def apply_pending_commands(db: Session) -> int:
 def isolate_section(db: Session, section_index: int, requested_by: str = "auto-isolation") -> int:
     """Close the two valves that bound a section (valve i upstream, valve i+1 downstream)."""
     closed = 0
-    pending_assets = {c.asset_id for c in db.scalars(select(Command).where(Command.status == "PENDING"))}
+    pending_assets = {c.asset_id for c in db.scalars(select(Command).where(
+        Command.status.in_(("PENDING", "SENT", "EXECUTED"))))}
     for asset in db.scalars(select(Asset).where(Asset.kind == "VALVE")):
         if asset.position in (section_index, section_index + 1) and asset.state == "OPEN" \
                 and asset.id not in pending_assets:

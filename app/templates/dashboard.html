@@ -35,7 +35,7 @@
         <tr>
           <th>Section</th><th>Pressure (bar)</th><th>Flow in (L/min)</th>
           <th>Flow out (L/min)</th><th>Difference (L/min)</th>
-          <th>Temp (&deg;C)</th><th>Status</th><th>Last reading (UTC)</th>
+          <th>Temp (&deg;C)</th><th>Status</th><th>Telemetry</th><th>Last reading (UTC)</th>
         </tr>
       </thead>
       <tbody>
@@ -53,6 +53,7 @@
           <td colspan="5">No readings yet</td>
           {% endif %}
           <td><span class="badge {{ row.section.status | status_css }}">{{ row.section.status | status_label }}</span></td>
+          <td>{{ row.telemetry_health | lower }}{% if r %} / sensor {{ r.sensor_status | lower }}{% endif %}</td>
           <td>{% if r %}{{ r.created_at.strftime("%Y-%m-%d %H:%M:%S") }}{% else %}-{% endif %}</td>
         </tr>
         {% endfor %}

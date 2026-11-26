@@ -133,8 +133,12 @@ def test_leak_confirmation_requires_multiple_readings(db_session):
     from sqlalchemy import select
     from app.schemas import ReadingIn
     from app.services import process_reading
+    from app.models import Asset, utcnow
+    from datetime import timedelta
 
     seed_sections(db_session)
+    for asset in db_session.scalars(select(Asset)):
+        asset.updated_at = utcnow() - timedelta(seconds=10)
     section = db_session.scalar(select(PipelineSection).where(PipelineSection.id == 1))
     assert section is not None
     first = process_reading(db_session, ReadingIn(pipeline_section_id=1, pressure=68, flow_in=1000, flow_out=800, temperature=35))
@@ -143,3 +147,22 @@ def test_leak_confirmation_requires_multiple_readings(db_session):
     assert first.result.status is Status.WARNING
     assert second.result.status is Status.WARNING
     assert third.result.status is Status.LEAK_SUSPECTED
+
+
+def test_recent_equipment_transition_delays_only_noncritical_leak(db_session):
+    from app.database import seed_sections
+    from app.models import Asset, utcnow
+    from app.schemas import ReadingIn
+    from app.services import process_reading
+
+    seed_sections(db_session)
+    valve = db_session.query(Asset).filter_by(name="Valve A-B").one()
+    valve.updated_at = utcnow()
+    transient = process_reading(db_session, ReadingIn(
+        pipeline_section_id=2, pressure=80, flow_in=1000, flow_out=800, temperature=35))
+    assert transient.result.status is Status.WARNING
+    assert "Recent equipment transition" in " ".join(transient.result.reasons)
+
+    critical = process_reading(db_session, ReadingIn(
+        pipeline_section_id=2, pressure=55, flow_in=1000, flow_out=700, temperature=35))
+    assert critical.result.status is Status.CRITICAL

@@ -1,5 +1,7 @@
 """API tests: readings, alerts, devices (IoT ingestion), equipment commands, audit."""
-from app.models import Asset
+from datetime import timedelta
+
+from app.models import Asset, Command, Device, SensorReading, utcnow
 from app.simulator import sim_step
 
 CRITICAL = {"pressure": 55, "flow_in": 1000, "flow_out": 700, "temperature": 35}
@@ -111,9 +113,59 @@ def test_device_polls_and_acks_commands(admin, db_session):
     pending = admin.get("/api/v1/device/commands", headers={"X-Device-Key": key}).json()
     assert pending and pending[0]["action"] == "CLOSE"
     ack = admin.post(f"/api/v1/device/commands/{pending[0]['id']}/ack", headers={"X-Device-Key": key})
-    assert ack.status_code == 200
+    assert ack.status_code == 200 and ack.json()["status"] == "SENT"
+    db_session.expire_all()
+    command = db_session.get(Command, pending[0]["id"])
+    assert command.status == "SENT"
+    assert db_session.get(Asset, valve.id).state == "OPEN"  # receipt is not execution or verification
+    assert admin.post(f"/api/v1/device/commands/{command.id}/verify",
+                      json={"observed_state": "CLOSED"}, headers={"X-Device-Key": key}).status_code == 409
+    executed = admin.post(f"/api/v1/device/commands/{command.id}/execute", headers={"X-Device-Key": key})
+    assert executed.status_code == 200 and executed.json()["status"] == "EXECUTED"
+    mismatch = admin.post(f"/api/v1/device/commands/{command.id}/verify",
+                          json={"observed_state": "OPEN"}, headers={"X-Device-Key": key})
+    assert mismatch.status_code == 409
+    assert admin.post(f"/api/v1/device/commands/{command.id}/execute",
+                      headers={"X-Device-Key": key}).status_code == 409
+    verified = admin.post(f"/api/v1/device/commands/{command.id}/verify",
+                          json={"observed_state": "CLOSED"}, headers={"X-Device-Key": key})
+    assert verified.status_code == 200 and verified.json()["status"] == "VERIFIED"
+    assert admin.post(f"/api/v1/device/commands/{command.id}/verify",
+                      json={"observed_state": "CLOSED"}, headers={"X-Device-Key": key}).status_code == 409
     db_session.expire_all()
     assert db_session.get(Asset, valve.id).state == "CLOSED"
+
+
+def test_simulator_completes_command_lifecycle(admin, db_session):
+    valve = db_session.query(Asset).filter_by(name="Valve A-B").one()
+    response = admin.post(f"/api/assets/{valve.id}/command", json={"action": "CLOSE"})
+    sim_step(admin.app.state.sim)
+    command = db_session.get(Command, response.json()["id"])
+    assert command.status == "VERIFIED"
+
+
+def test_ingestion_rejects_unavailable_deduplication_metadata(admin):
+    key = make_device(admin)["api_key"]
+    response = ingest(admin, key, {**NORMAL, "sequence": 42})
+    assert response.status_code == 422
+
+
+def test_state_exposes_section_and_device_freshness(admin, db_session):
+    key = make_device(admin, section=1)["api_key"]
+    ingest(admin, key, NORMAL)
+    first = db_session.query(SensorReading).one()
+    first.created_at = utcnow() - timedelta(seconds=61)
+    db_session.add(SensorReading(pipeline_section_id=2, pressure=80, flow_in=1000,
+                                 flow_out=980, temperature=35, sensor_status="OK",
+                                 detected_status="NORMAL",
+                                 created_at=utcnow() - timedelta(seconds=121)))
+    device = db_session.query(Device).one()
+    device.last_seen = utcnow() - timedelta(seconds=61)
+    db_session.commit()
+
+    state = admin.get("/api/state").json()
+    assert [s["telemetry_health"] for s in state["sections"]] == ["STALE", "OFFLINE", "MISSING"]
+    assert state["devices"]["items"][0]["health"] == "STALE"
 
 
 def test_auto_isolation_closes_valves_around_critical_section(admin, db_session):

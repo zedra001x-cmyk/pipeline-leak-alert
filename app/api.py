@@ -13,12 +13,13 @@ from sqlalchemy.orm import Session, joinedload
 
 from app.auth import (device_auth, generate_device_key, hash_device_key, require_role)
 from app.config import SIMULATION
-from app.control import CommandError, apply_command, audit, enqueue_command, set_setting
+from app.control import (CommandError, audit, enqueue_command, set_setting,
+                         transition_command)
 from app.database import get_db
 from app.detection import ReadingValidationError
 from app.models import (Alert, AuditLog, Asset, Command, Device, PipelineSection,
                         SensorReading, User, utcnow)
-from app.schemas import (AlertOut, AuditOut, CommandIn, DeviceCreate, DeviceCreated, DeviceOut,
+from app.schemas import (AlertOut, AuditOut, CommandIn, CommandVerifyIn, DeviceCreate, DeviceCreated, DeviceOut,
                          DeviceReadingIn, EnabledIn, LeakIn, TankLevelsIn, ReadingIn, ReadingOut, ReadingResult,
                          SectionOut)
 from app.control import set_setting as _set_setting
@@ -229,10 +230,40 @@ def device_ack(command_id: int, device: Device = Depends(device_auth), db: Sessi
     if command is None or command.asset.pipeline_section_id != device.pipeline_section_id \
             or command.status != "PENDING":
         raise HTTPException(status_code=404, detail="Command not found")
-    apply_command(db, command)
+    transition_command(command, "SENT")
     audit(db, device.name, "COMMAND_ACK", f"{command.asset.name}: {command.action}")
     db.commit()
-    return {"status": "APPLIED"}
+    return {"status": command.status}
+
+
+@router.post("/v1/device/commands/{command_id}/execute")
+def device_command_executed(command_id: int, device: Device = Depends(device_auth),
+                             db: Session = Depends(get_db)):
+    command = db.get(Command, command_id)
+    if command is None or command.asset.pipeline_section_id != device.pipeline_section_id:
+        raise HTTPException(status_code=404, detail="Command not found")
+    try:
+        transition_command(command, "EXECUTED")
+    except CommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    audit(db, device.name, "COMMAND_EXECUTED", f"{command.asset.name}: {command.action}")
+    db.commit()
+    return {"status": command.status}
+
+
+@router.post("/v1/device/commands/{command_id}/verify")
+def device_command_verified(command_id: int, body: CommandVerifyIn,
+                             device: Device = Depends(device_auth), db: Session = Depends(get_db)):
+    command = db.get(Command, command_id)
+    if command is None or command.asset.pipeline_section_id != device.pipeline_section_id:
+        raise HTTPException(status_code=404, detail="Command not found")
+    try:
+        transition_command(command, "VERIFIED", body.observed_state)
+    except CommandError as exc:
+        raise HTTPException(status_code=409, detail=str(exc))
+    audit(db, device.name, "COMMAND_VERIFIED", f"{command.asset.name}: {body.observed_state}")
+    db.commit()
+    return {"status": command.status}
 
 
 # ---- tank levels (10 tanks, percent)

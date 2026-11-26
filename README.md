@@ -45,7 +45,7 @@ Add users: `python -m app.cli create-user NAME operator` (roles: viewer, operato
 curl -X POST http://HOST:8010/api/v1/ingest -H "X-Device-Key: pk_..." -H "Content-Type: application/json" \
   -d '{"pressure":80,"flow_in":1000,"flow_out":985,"temperature":35,"sensor_status":"OK"}'
 ```
-3. Control: the device polls `GET /api/v1/device/commands`, applies each command to its hardware, then calls `POST /api/v1/device/commands/{id}/ack`.
+3. Control: the device polls `GET /api/v1/device/commands`, acknowledges receipt with `POST /api/v1/device/commands/{id}/ack` (PENDING → SENT), reports application with `/execute` (SENT → EXECUTED), then reports its observed equipment state to `/verify` (EXECUTED → VERIFIED). Receipt alone does not verify the action. The built-in simulator advances all stages for its virtual equipment and verifies its own simulated state; this is not physical verification.
 4. Set `SIMULATION=0` so the virtual devices stop.
 
 ## Detection rules (`app/detection.py`)
@@ -64,8 +64,12 @@ A `FAULT`/`OFFLINE` sensor skips the rules and raises a WARNING. Defaults (warni
 ## Settings (environment variables)
 `ALERT_WEBHOOK_URL`, `ALERT_WEBHOOK_SECRET`, `TEMP_WARNING`, `TEMP_DANGER`, `DATABASE_URL`, `SIMULATION` (1/0), `SIM_INTERVAL` (seconds), `SESSION_HOURS`, `DEVICE_ONLINE_SECONDS`, `ADMIN_USERNAME`, `ADMIN_PASSWORD`.
 
+Telemetry freshness is based on server receipt time: current through one `DEVICE_ONLINE_SECONDS` interval, stale through two intervals, then offline; a section with no reading is missing. This tolerates one delayed interval. The ingestion contract has no sender timestamp, sequence number, or reading identifier, so PetroTrack cannot reliably reject duplicate or delayed device payloads. It records each valid submission; adding reliable deduplication requires an explicit device-provided identity/time contract.
+
+After a pump or relevant valve state changes, non-critical suspected-leak results are temporarily shown as warnings for five seconds while flow settles. Critical conditions remain immediate and leak confirmation still requires consecutive readings.
+
 ## API summary
-Browser session (+ `X-CSRF-Token` header for writes): `GET /api/state`, `/api/pipeline-sections`, `/api/readings`, `/api/alerts`; `POST /api/alerts/{id}/acknowledge`, `/api/assets/{id}/command`, `/api/sim/{pause|resume|leak|repair}`; admin: `/api/devices`, `/api/settings/auto-isolation`, `/api/audit`. Devices (API key): `POST /api/v1/ingest`, `GET /api/v1/device/commands`, `POST /api/v1/device/commands/{id}/ack`. Open: `GET /api/health`. Interactive docs at `/docs`.
+Browser session (+ `X-CSRF-Token` header for writes): `GET /api/state`, `/api/pipeline-sections`, `/api/readings`, `/api/alerts`; `POST /api/alerts/{id}/acknowledge`, `/api/assets/{id}/command`, `/api/sim/{pause|resume|leak|repair}`; admin: `/api/devices`, `/api/settings/auto-isolation`, `/api/audit`. Devices (API key): `POST /api/v1/ingest`, `GET /api/v1/device/commands`, and command `POST` endpoints `/ack`, `/execute`, `/verify`. Open: `GET /api/health`. Interactive docs at `/docs`.
 
 ## Security notes
 Passwords: PBKDF2-SHA256. Sessions: server-side, random tokens stored hashed, HttpOnly + SameSite=Strict cookie. Device keys: stored hashed. SQLAlchemy only (no raw SQL), auto-escaped templates, CSP and other headers. **Serve over HTTPS** (for example behind a Cloudflare tunnel or reverse proxy) before exposing it beyond a trusted network; the cookie is not marked `Secure` so that plain local HTTP works.
