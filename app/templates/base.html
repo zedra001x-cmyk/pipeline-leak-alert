@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="csrf-token" content="{{ csrf_token }}">
+  <title>{% block title %}Pipeline Leak Alert System{% endblock %}</title>
+  <link rel="stylesheet" href="/static/style.css">
+  <script src="/static/app.js" defer></script>
+  {% block head %}{% endblock %}
+</head>
+<body data-role="{{ user.role if user else '' }}">
+  <header class="site-header">
+    <div class="head-row">
+      <h1>Pipeline Leak Alert System</h1>
+      <span class="mode-badge {{ 'sim' if mode == 'SIMULATION' else 'live' }}">{{ 'Simulation mode' if mode == 'SIMULATION' else 'Live devices' }}</span>
+    </div>
+    {% if user %}
+    <nav class="nav">
+      <a href="/">Dashboard</a>
+      <a href="/operations">Operations</a>
+      {% if user.role == 'admin' %}<a href="/devices">Devices</a>{% endif %}
+      <span class="who">{{ user.username }} ({{ user.role }})</span>
+      <form method="post" action="/logout" class="inline-form">
+        <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+        <button type="submit" class="linkbtn">Log out</button>
+      </form>
+    </nav>
+    {% endif %}
+  </header>
+  <main class="container">
+    {% block content %}{% endblock %}
+  </main>
+</body>
+</html>

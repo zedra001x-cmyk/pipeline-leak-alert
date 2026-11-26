@@ -1,0 +1,184 @@
+{% extends "base.html" %}
+{% block content %}
+
+{% if result_reading %}
+<div class="banner {{ result_reading.detected_status | status_css }}" role="status">
+  Reading #{{ result_reading.id }} for {{ result_reading.section.name }} was classified as
+  <strong>{{ result_reading.detected_status | status_label }}</strong>
+  (flow difference {{ "%.1f"|format(result_reading.flow_difference) }} L/min).
+</div>
+{% endif %}
+
+{% if errors %}
+<div class="banner error" role="alert">
+  <strong>The reading was not saved:</strong>
+  <ul>{% for e in errors %}<li>{{ e }}</li>{% endfor %}</ul>
+</div>
+{% endif %}
+
+<p><a class="btn" href="/operations">Open live operations view</a></p>
+
+<section class="cards" aria-label="Summary">
+  <div class="card"><span class="num">{{ summary.total }}</span><span>Pipeline sections</span></div>
+  <div class="card"><span class="num">{{ summary.normal }}</span><span>Normal</span></div>
+  <div class="card"><span class="num">{{ summary.warning }}</span><span>Warning</span></div>
+  <div class="card"><span class="num">{{ summary.leak_or_critical }}</span><span>Leak / critical</span></div>
+  <div class="card"><span class="num">{{ summary.active_alerts }}</span><span>Active alerts</span></div>
+</section>
+
+<section>
+  <h2>Pipeline sections</h2>
+  <p class="flow">Depot A &rarr; Section A &rarr; Section B &rarr; Section C &rarr; Depot B</p>
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr>
+          <th>Section</th><th>Pressure (bar)</th><th>Flow in (L/min)</th>
+          <th>Flow out (L/min)</th><th>Difference (L/min)</th>
+          <th>Temp (&deg;C)</th><th>Status</th><th>Last reading (UTC)</th>
+        </tr>
+      </thead>
+      <tbody>
+        {% for row in rows %}
+        {% set r = row.reading %}
+        <tr>
+          <td>{{ row.section.name }}<br><small>{{ row.section.start_point }} &rarr; {{ row.section.end_point }}</small></td>
+          {% if r %}
+          <td>{{ "%.1f"|format(r.pressure) }}</td>
+          <td>{{ "%.1f"|format(r.flow_in) }}</td>
+          <td>{{ "%.1f"|format(r.flow_out) }}</td>
+          <td>{{ "%.1f"|format(r.flow_difference) }}</td>
+          <td>{{ "%.1f"|format(r.temperature) }}</td>
+          {% else %}
+          <td colspan="5">No readings yet</td>
+          {% endif %}
+          <td><span class="badge {{ row.section.status | status_css }}">{{ row.section.status | status_label }}</span></td>
+          <td>{% if r %}{{ r.created_at.strftime("%Y-%m-%d %H:%M:%S") }}{% else %}-{% endif %}</td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section>
+  <h2>Tank levels</h2>
+  {% if tanks.levels %}
+  <p>Average level of {{ tanks.levels|length }} tanks: <strong>{{ "%.1f"|format(tanks.average) }}%</strong></p>
+  <div class="table-wrap">
+    <table>
+      <thead><tr><th>Tank</th><th>Level</th></tr></thead>
+      <tbody>
+        {% for level in tanks.levels %}
+        <tr><td>Tank {{ loop.index }}</td><td><meter min="0" max="100" value="{{ level }}"></meter> {{ "%.1f"|format(level) }}%</td></tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p>No tank levels reported yet.</p>
+  {% endif %}
+  <p class="hint">Reports: <a href="/api/export/readings.csv">readings (CSV)</a> | <a href="/api/export/alerts.csv">alerts (CSV)</a></p>
+</section>
+
+<section>
+  <h2>Enter a manual reading</h2>
+  <p>For testing or manual field readings (operator role). Test values fill the form.</p>
+  <div class="scenarios">
+    {% for s in scenarios %}
+    <button type="button" class="btn secondary"
+            data-scenario="{{ s.key }}"
+            data-pressure="{{ s.pressure }}" data-flow-in="{{ s.flow_in }}"
+            data-flow-out="{{ s.flow_out }}" data-temperature="{{ s.temperature }}">
+      {{ s.label }}
+    </button>
+    {% endfor %}
+  </div>
+  <p id="scenario-note" class="hint" aria-live="polite"></p>
+
+  <form id="reading-form" method="post" action="/readings" class="reading-form">
+    <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+
+    <label>Pipeline section
+      <select name="pipeline_section_id" required>
+        {% for row in rows %}
+        <option value="{{ row.section.id }}" {% if form.get('pipeline_section_id') == row.section.id|string %}selected{% endif %}>{{ row.section.name }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <label>Pressure (bar)
+      <input type="number" name="pressure" step="any" inputmode="decimal" required
+             min="{{ limits.pressure_min }}" max="{{ limits.pressure_max }}"
+             value="{{ form.get('pressure', '') }}">
+    </label>
+    <label>Flow in (L/min)
+      <input type="number" name="flow_in" step="any" inputmode="decimal" required
+             min="{{ limits.flow_min }}" max="{{ limits.flow_max }}"
+             value="{{ form.get('flow_in', '') }}">
+    </label>
+    <label>Flow out (L/min)
+      <input type="number" name="flow_out" step="any" inputmode="decimal" required
+             min="{{ limits.flow_min }}" max="{{ limits.flow_max }}"
+             value="{{ form.get('flow_out', '') }}">
+    </label>
+    <label>Temperature (&deg;C)
+      <input type="number" name="temperature" step="any" inputmode="decimal" required
+             min="{{ limits.temperature_min }}" max="{{ limits.temperature_max }}"
+             value="{{ form.get('temperature', '') }}">
+    </label>
+    <label>Sensor status
+      <select name="sensor_status">
+        {% for s in sensor_statuses %}
+        <option value="{{ s }}" {% if form.get('sensor_status') == s %}selected{% endif %}>{{ s }}</option>
+        {% endfor %}
+      </select>
+    </label>
+    <button type="submit" class="btn">Submit reading</button>
+  </form>
+</section>
+
+<section id="alerts">
+  <h2>Alerts</h2>
+  {% if alerts %}
+  <div class="table-wrap">
+    <table>
+      <thead>
+        <tr><th>Section</th><th>Severity</th><th>Message</th><th>Time (UTC)</th><th>Status</th></tr>
+      </thead>
+      <tbody>
+        {% for a in alerts %}
+        <tr>
+          <td>{{ a.section.name }}</td>
+          <td><span class="badge {{ a.severity | status_css }}">{{ a.severity | status_label }}</span></td>
+          <td>{{ a.message }}</td>
+          <td>{{ a.created_at.strftime("%Y-%m-%d %H:%M:%S") }}</td>
+          <td>
+            {{ a.status | capitalize }}
+            {% if a.status == "ACTIVE" %}
+            <form method="post" action="/alerts/{{ a.id }}/acknowledge" class="inline-form">
+              <input type="hidden" name="csrf_token" value="{{ csrf_token }}">
+              <button type="submit" class="btn small">Acknowledge</button>
+            </form>
+            {% endif %}
+          </td>
+        </tr>
+        {% endfor %}
+      </tbody>
+    </table>
+  </div>
+  {% else %}
+  <p>No alerts yet.</p>
+  {% endif %}
+</section>
+
+<section>
+  <h2>Detection thresholds</h2>
+  <p class="hint">Placeholder defaults. Calibrate them for your pipeline (see README) before relying on alerts.</p>
+  <ul>
+    <li>Warning: flow difference &ge; {{ "%g"|format(thresholds.warning_flow_diff) }} L/min, or pressure below {{ "%g"|format(thresholds.min_pressure + thresholds.pressure_warning_margin) }} bar</li>
+    <li>Leak suspected: flow difference &ge; {{ "%g"|format(thresholds.leak_flow_diff) }} L/min, or pressure below {{ "%g"|format(thresholds.min_pressure) }} bar</li>
+    <li>Critical: flow difference &ge; {{ "%g"|format(thresholds.critical_flow_diff) }} L/min with pressure below {{ "%g"|format(thresholds.min_pressure) }} bar, or pressure below {{ "%g"|format(thresholds.severe_pressure) }} bar with a leak-level flow difference</li>
+  </ul>
+</section>
+
+{% endblock %}

@@ -1,0 +1,51 @@
+{% extends "base.html" %}
+{% block title %}Operations - Pipeline Leak Alert System{% endblock %}
+{% block head %}<script src="/static/ops3d.js" defer></script>{% endblock %}
+{% block content %}
+<h2>Live operations</h2>
+<p class="hint">Drag to rotate, scroll or pinch to zoom. Everything shown is live data from the backend.</p>
+
+<div class="sim-wrap"><canvas id="sim-canvas" aria-label="3D view of the pipeline"></canvas></div>
+<p id="sim-status" class="hint" aria-live="polite">Connecting...</p>
+
+<div class="panels">
+  <section class="panel sim-only" hidden>
+    <h3>Virtual devices</h3>
+    <div class="ctl">
+      <button type="button" id="sim-toggle" class="btn secondary needs-operator">Pause</button>
+      <button type="button" class="btn secondary needs-operator" data-leak="0">Leak in A</button>
+      <button type="button" class="btn secondary needs-operator" data-leak="1">Leak in B</button>
+      <button type="button" class="btn secondary needs-operator" data-leak="2">Leak in C</button>
+      <button type="button" class="btn secondary needs-operator" data-heat="0">Overheat A</button>
+      <button type="button" class="btn secondary needs-operator" data-heat="1">Overheat B</button>
+      <button type="button" class="btn secondary needs-operator" data-heat="2">Overheat C</button>
+      <button type="button" id="sim-repair" class="btn secondary needs-operator">Repair all</button>
+    </div>
+  </section>
+  <section class="panel">
+    <h3>Equipment control</h3>
+    <div id="asset-controls" class="ctl"></div>
+    <label class="check"><input type="checkbox" id="auto-isolate" disabled> Auto-isolate a critical section (admin)</label>
+  </section>
+  <section class="panel">
+    <h3>View</h3>
+    <div id="layer-list" class="ctl"></div>
+    <div class="ctl">
+      <label class="check"><input type="checkbox" id="sim-rotate" checked> Auto-rotate</label>
+      <button type="button" id="cam-reset" class="btn secondary">Reset camera</button>
+    </div>
+  </section>
+</div>
+
+<section>
+  <h2>Tank farm</h2>
+  <p>Average level: <strong id="tank-avg">n/a</strong></p>
+  <ul id="tank-list" class="tank-list"></ul>
+  <p class="hint">Reports: <a href="/api/export/readings.csv">readings (CSV)</a> | <a href="/api/export/alerts.csv">alerts (CSV)</a></p>
+</section>
+
+<section>
+  <h2>Latest alerts</h2>
+  <ul id="sim-alerts" class="alert-list"><li>Loading...</li></ul>
+</section>
+{% endblock %}

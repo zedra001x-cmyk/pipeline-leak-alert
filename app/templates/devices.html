@@ -1,0 +1,22 @@
+{% extends "base.html" %}
+{% block title %}Devices - Pipeline Leak Alert System{% endblock %}
+{% block head %}<script src="/static/devices.js" defer></script>{% endblock %}
+{% block content %}
+<h2>IoT devices</h2>
+<p class="hint">Each sensor node gets its own API key. Send readings with <code>POST /api/v1/ingest</code> and header <code>X-Device-Key</code>. The key is shown once.</p>
+
+<form id="device-form" class="reading-form">
+  <label>Device name <input name="name" maxlength="60" required></label>
+  <label>Pipeline section <select name="section" id="device-section"></select></label>
+  <button type="submit" class="btn">Register device</button>
+</form>
+<div id="device-key" class="banner status-normal" hidden></div>
+<p id="device-error" class="hint" role="alert"></p>
+
+<div class="table-wrap">
+  <table>
+    <thead><tr><th>Name</th><th>Section</th><th>Last seen (UTC)</th><th>Status</th><th></th></tr></thead>
+    <tbody id="device-rows"></tbody>
+  </table>
+</div>
+{% endblock %}
